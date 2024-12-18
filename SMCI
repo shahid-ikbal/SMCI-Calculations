@@ -1,0 +1,102 @@
+// Define the region of interest (Pakistan)
+var pakistan = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017")
+                  .filter(ee.Filter.eq('country_na', 'Pakistan'));
+
+// Load soil moisture data (SMAP L4 Global Daily Soil Moisture Data)
+var soilMoisture = ee.ImageCollection("NASA_USDA/HSL/SMAP10KM_soil_moisture")
+                    .filterBounds(pakistan)
+                    .filterDate('2020-01-01', '2023-01-01'); // Change to your desired time period
+
+// Calculate mean soil moisture over the time period
+var meanSoilMoisture = soilMoisture.select('ssm').mean();
+
+// Calculate min and max soil moisture for normalization
+var minSoilMoisture = meanSoilMoisture.reduceRegion({
+  reducer: ee.Reducer.min(),
+  geometry: pakistan,
+  scale: 10000,
+  maxPixels: 1e13
+}).get('ssm');
+
+var maxSoilMoisture = meanSoilMoisture.reduceRegion({
+  reducer: ee.Reducer.max(),
+  geometry: pakistan,
+  scale: 10000,
+  maxPixels: 1e13
+}).get('ssm');
+
+// Compute the Soil Moisture Condition Index (SMCI)
+var smci = meanSoilMoisture.expression(
+  '((SM - MIN) / (MAX - MIN)) * 100', {
+    'SM': meanSoilMoisture,
+    'MIN': ee.Number(minSoilMoisture),
+    'MAX': ee.Number(maxSoilMoisture)
+  }
+);
+
+// Clip SMCI to Pakistan
+var smciClipped = smci.clip(pakistan);
+
+// Visualization parameters for SMCI
+var smciVis = {
+  min: 0,
+  max: 100,
+  palette: ['red', 'yellow', 'green'] // Red for drought, green for wet conditions
+};
+
+// Add layers to the map
+Map.centerObject(pakistan, 6);
+Map.addLayer(smciClipped, smciVis, 'Soil Moisture Condition Index');
+
+// Add Pakistan boundary for context
+Map.addLayer(pakistan.style({ color: 'blue', fillColor: '00000000' }), {}, 'Pakistan Boundary');
+
+// Add Legend
+function addLegend() {
+  var legend = ui.Panel({style: {position: 'top-right', padding: '8px 15px'}});
+  
+  var legendTitle = ui.Label({
+    value: 'Soil Moisture Condition Index (SMCI)',
+    style: {fontWeight: 'bold', fontSize: '14px', margin: '0 0 4px 0', padding: '0'}
+  });
+  legend.add(legendTitle);
+
+  var palette = ['red', 'yellow', 'green'];
+  var names = ['Dry (0%)', 'Moderate (50%)', 'Wet (100%)'];
+  
+  for (var i = 0; i < palette.length; i++) {
+    var colorBox = ui.Label({
+      style: {
+        backgroundColor: palette[i],
+        padding: '8px',
+        margin: '0 0 4px 0'
+      }
+    });
+    
+    var description = ui.Label({
+      value: names[i],
+      style: {margin: '0 0 4px 6px'}
+    });
+    
+    var legendItem = ui.Panel({
+      widgets: [colorBox, description],
+      layout: ui.Panel.Layout.Flow('horizontal')
+    });
+    
+    legend.add(legendItem);
+  }
+  
+  Map.add(legend);
+}
+
+// Call the legend function
+addLegend();
+
+// Export the SMCI result as GeoTIFF
+Export.image.toDrive({
+  image: smciClipped,
+  description: 'SMCI_Pakistan',
+  region: pakistan.geometry(),
+  scale: 10000,
+  maxPixels: 1e13
+});
